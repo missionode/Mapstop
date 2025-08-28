@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Map Route Builder</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .controls {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .btn {
+      appearance: none; border: 1px solid #cbd5e1; background: #fff;
+      padding: 8px 12px; border-radius: 8px; font: 600 14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu;
+      box-shadow: 0 1px 2px rgba(0,0,0,.06); cursor: pointer;
+    }
+    #panel {
+      position: absolute; top: 56px; left: 12px; z-index: 1000;
+      width: min(90vw, 360px); background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 10px; display: none;
+    }
+    #query {
+      width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px;
+    }
+    #results { margin-top: 8px; max-height: 240px; overflow: auto; }
+    .result {
+      padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 14px;
+    }
+    .result:hover { background: #f1f5f9; }
+    .empty { color: #64748b; font-size: 13px; padding: 6px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="controls">
+    <button id="addBtn" class="btn">Add Place</button>
+  </div>
+
+  <div id="panel">
+    <input id="query" type="text" placeholder="Search a place (min 3 chars)..." autocomplete="off" />
+    <div id="results"></div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    // Init map
+    const map = L.map('map').setView([20.5937, 78.9629], 5); // India view
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    const points = [];
+    const markers = [];
+    const polyline = L.polyline([], { weight: 4 }).addTo(map);
+
+    const addBtn = document.getElementById('addBtn');
+    const panel = document.getElementById('panel');
+    const query = document.getElementById('query');
+    const results = document.getElementById('results');
+
+    addBtn.addEventListener('click', () => {
+      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+      results.innerHTML = '';
+      query.value = '';
+      query.focus();
+    });
+
+    function addPlace(latlng, label) {
+      const m = L.marker(latlng).addTo(map)
+        .bindPopup(`<b>${label}</b><br>${latlng[0].toFixed(5)}, ${latlng[1].toFixed(5)}`);
+      markers.push(m);
+      points.push(latlng);
+      polyline.setLatLngs(points);
+
+      if (points.length === 1) map.setView(latlng, 12);
+      else map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
+    }
+
+    function showResults(items) {
+      results.innerHTML = '';
+      if (!items.length) {
+        results.innerHTML = '<div class="empty">No matches</div>';
+        return;
+      }
+      for (const item of items) {
+        const div = document.createElement('div');
+        div.className = 'result';
+        div.textContent = item.display_name;
+        div.addEventListener('click', () => {
+          addPlace([parseFloat(item.lat), parseFloat(item.lon)], item.display_name);
+          panel.style.display = 'none';
+        });
+        results.appendChild(div);
+      }
+    }
+
+    let debounceTimer = null, abortCtrl = null;
+    query.addEventListener('input', (e) => {
+      const q = e.target.value.trim();
+      if (q.length < 3) { results.innerHTML = ''; if (abortCtrl) abortCtrl.abort(); return; }
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        try {
+          if (abortCtrl) abortCtrl.abort();
+          abortCtrl = new AbortController();
+          const url = `https://nominatim.openstreetmap.org/search?format=json&limit=8&q=${encodeURIComponent(q)}`;
+          const res = await fetch(url, { signal: abortCtrl.signal, headers: { 'Accept': 'application/json' } });
+          const data = await res.json();
+          showResults(data);
+        } catch (err) {
+          if (err.name !== 'AbortError') results.innerHTML = '<div class="empty">Search failed</div>';
+        }
+      }, 300);
+    });
+  </script>
+</body>
+</html>
