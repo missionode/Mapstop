@@ -3,14 +3,18 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Map Route Builder — Predicted 4th Point</title>
+<title>Map Route Builder — Prediction Tools</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
   html,body,#map{height:100%;margin:0}
-  .controls{position:absolute;top:12px;left:12px;z-index:1000;display:flex;gap:8px;flex-wrap:wrap}
+  .controls{
+    position:absolute;inset:auto 0 auto 0;top:12px;left:12px;z-index:2000;
+    display:flex;flex-wrap:wrap;gap:8px;max-width:min(96vw,760px)
+  }
   .btn{border:1px solid #cbd5e1;background:#fff;padding:8px 12px;border-radius:8px;font:600 14px system-ui;box-shadow:0 1px 2px rgba(0,0,0,.06);cursor:pointer}
   .btn[disabled]{opacity:.45;cursor:not-allowed}
-  #panel{position:absolute;top:56px;left:12px;z-index:1000;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
+  .badge{padding:8px 10px;border:1px dashed #cbd5e1;border-radius:8px;font:600 12px;color:#475569;background:#f8fafc}
+  #panel{position:absolute;top:56px;left:12px;z-index:1500;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
   #searchBox{padding:10px;border-bottom:1px solid #e2e8f0}
   #query{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
   #results{max-height:220px;overflow:auto}
@@ -27,14 +31,16 @@
 <body>
 <div id="map"></div>
 
-<div class="controls">
+<div class="controls" id="controls">
   <button id="addBtn" class="btn">Add Place</button>
   <button id="clearBtn" class="btn">Clear</button>
   <label class="btn" style="display:flex;gap:6px;align-items:center;">
     <input type="checkbox" id="snapChk"/> Snap to road
   </label>
   <button id="exportBtn" class="btn">Export GeoJSON</button>
+  <button id="predictBtn" class="btn">Predict</button>
   <button id="usePredBtn" class="btn" disabled>Use prediction ➕</button>
+  <span id="predStatus" class="badge">Prediction: none</span>
 </div>
 
 <div id="panel">
@@ -55,8 +61,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,att
 const addBtn = document.getElementById('addBtn');
 const clearBtn = document.getElementById('clearBtn');
 const exportBtn = document.getElementById('exportBtn');
-const snapChk = document.getElementById('snapChk');
+const predictBtn = document.getElementById('predictBtn');
 const usePredBtn = document.getElementById('usePredBtn');
+const predStatus = document.getElementById('predStatus');
+const snapChk = document.getElementById('snapChk');
 const panel = document.getElementById('panel');
 const query = document.getElementById('query');
 const results = document.getElementById('results');
@@ -103,49 +111,25 @@ function refresh(){
   if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
   buildList();
   scheduleRouteUpdate();
-  updatePredictedPoint();
+  updatePredictedPoint(); // compute & update UI
 }
 
 function buildList(){
   wpList.innerHTML = '';
   points.forEach((p,idx)=>{
-    const row = document.createElement('div');
-    row.className = 'wp';
-    row.draggable = true;
-    row.dataset.index = idx;
+    const row = document.createElement('div'); row.className='wp'; row.draggable=true; row.dataset.index=idx;
+    const handle = document.createElement('span'); handle.className='handle'; handle.textContent='↕'; row.appendChild(handle);
+    const label = document.createElement('div'); label.className='label'; label.textContent=`${idx+1}. ${p.label}`; row.appendChild(label);
+    const del = document.createElement('button'); del.className='del'; del.textContent='×'; del.title='Remove'; del.onclick=()=>removeIndex(idx); row.appendChild(del);
 
-    const handle = document.createElement('span');
-    handle.className = 'handle';
-    handle.textContent = '↕';
-    row.appendChild(handle);
-
-    const label = document.createElement('div');
-    label.className = 'label';
-    label.textContent = `${idx+1}. ${p.label}`;
-    row.appendChild(label);
-
-    const del = document.createElement('button');
-    del.className = 'del';
-    del.textContent = '×';
-    del.title = 'Remove';
-    del.onclick = ()=>removeIndex(idx);
-    row.appendChild(del);
-
-    row.addEventListener('dragstart', e=>{
-      e.dataTransfer.setData('text/plain', idx);
-      e.dataTransfer.effectAllowed = 'move';
-    });
+    row.addEventListener('dragstart', e=>{ e.dataTransfer.setData('text/plain', idx); e.dataTransfer.effectAllowed='move'; });
     row.addEventListener('dragover', e=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; });
     row.addEventListener('drop', e=>{
       e.preventDefault();
-      const from = +e.dataTransfer.getData('text/plain');
-      const to = +row.dataset.index;
+      const from=+e.dataTransfer.getData('text/plain'); const to=+row.dataset.index;
       if(from===to) return;
-      const [moved] = points.splice(from,1);
-      points.splice(to,0,moved);
-      refresh();
+      const [moved]=points.splice(from,1); points.splice(to,0,moved); refresh();
     });
-
     wpList.appendChild(row);
   });
 }
@@ -156,28 +140,22 @@ function showResults(items){
   results.innerHTML = '';
   if(!items.length){ results.innerHTML = '<div class="empty">No matches</div>'; return; }
   for(const item of items){
-    const div = document.createElement('div');
-    div.className = 'result';
-    div.textContent = item.display_name;
-    div.onclick = ()=>{
-      addPlace([parseFloat(item.lat), parseFloat(item.lon)], item.display_name);
-      closePanel();
-    };
+    const div=document.createElement('div'); div.className='result'; div.textContent=item.display_name;
+    div.onclick=()=>{ addPlace([parseFloat(item.lat), parseFloat(item.lon)], item.display_name); closePanel(); };
     results.appendChild(div);
   }
 }
 query.addEventListener('input', e=>{
-  const q = e.target.value.trim();
+  const q=e.target.value.trim();
   if(q.length<3){ results.innerHTML=''; if(abortCtrl) abortCtrl.abort(); return; }
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(async ()=>{
+  debounceTimer=setTimeout(async ()=>{
     try{
       if(abortCtrl) abortCtrl.abort();
-      abortCtrl = new AbortController();
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=8&q=${encodeURIComponent(q)}`;
-      const res = await fetch(url,{signal:abortCtrl.signal, headers:{'Accept':'application/json'}});
-      const data = await res.json();
-      showResults(data);
+      abortCtrl=new AbortController();
+      const url=`https://nominatim.openstreetmap.org/search?format=json&limit=8&q=${encodeURIComponent(q)}`;
+      const res=await fetch(url,{signal:abortCtrl.signal, headers:{'Accept':'application/json'}});
+      const data=await res.json(); showResults(data);
     }catch(err){ if(err.name!=='AbortError') results.innerHTML='<div class="empty">Search failed</div>'; }
   },300);
 });
@@ -192,107 +170,92 @@ async function updateRoute(){
   const coords = points.map(p=>`${p.lon},${p.lat}`).join(';');
   const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
   try{
-    const res = await fetch(url);
-    if(!res.ok) throw new Error('routing failed');
-    const data = await res.json();
-    const geom = data?.routes?.[0]?.geometry;
-    if(!geom) return;
-    const latlngs = geom.coordinates.map(([lng,lat])=>[lat,lng]);
-    snappedLine.setLatLngs(latlngs);
+    const res=await fetch(url); if(!res.ok) throw new Error('routing failed');
+    const data=await res.json(); const geom=data?.routes?.[0]?.geometry; if(!geom) return;
+    const latlngs=geom.coordinates.map(([lng,lat])=>[lat,lng]); snappedLine.setLatLngs(latlngs);
   }catch(e){ /* silent */ }
 }
 
 /* --- Export GeoJSON --- */
 function toGeoJSON(){
-  const fc = { type:"FeatureCollection", features:[] };
+  const fc={type:"FeatureCollection",features:[]};
   for(const [i,p] of points.entries()){
-    fc.features.push({ type:"Feature", properties:{order:i+1,name:p.label}, geometry:{ type:"Point", coordinates:[p.lon,p.lat] }});
+    fc.features.push({type:"Feature",properties:{order:i+1,name:p.label},geometry:{type:"Point",coordinates:[p.lon,p.lat]}});
   }
   if(points.length>=2){
     fc.features.push({
-      type:"Feature",
-      properties:{ name: snapChk.checked ? "route_snapped" : "route_straight" },
-      geometry:{
-        type:"LineString",
-        coordinates: (snappedLine.getLatLngs().length && snapChk.checked)
-          ? snappedLine.getLatLngs().map(ll=>[ll.lng,ll.lat])
-          : points.map(p=>[p.lon,p.lat])
-      }
+      type:"Feature",properties:{name:snapChk.checked?"route_snapped":"route_straight"},
+      geometry:{type:"LineString",coordinates:(snappedLine.getLatLngs().length&&snapChk.checked)?snappedLine.getLatLngs().map(ll=>[ll.lng,ll.lat]):points.map(p=>[p.lon,p.lat])}
     });
   }
   return fc;
 }
 exportBtn.addEventListener('click', ()=>{
-  const blob = new Blob([JSON.stringify(toGeoJSON(),null,2)], {type:'application/geo+json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'route.geojson';
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(a.href);
+  const blob=new Blob([JSON.stringify(toGeoJSON(),null,2)],{type:'application/geo+json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='route.geojson';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 });
 
-/* --- Predict 4th point from last three (A,B,C) ---
-   D = intersection of line(AB) and ray from C along (B→C).
-   If parallel or hit behind C, hide prediction.
-   Uses local equirectangular projection for 2D math.
-*/
-const EPS = 1e-12;
-const deg2rad = d=>d*Math.PI/180;
-function project(pt, lat0){ const cl=Math.cos(deg2rad(lat0)); return {x:pt.lon*cl, y:pt.lat}; }
-function unproject(xy, lat0){ const cl=Math.cos(deg2rad(lat0)); return {lat:xy.y, lon:xy.x/cl}; }
+/* --- Prediction math (A,B,C -> D) --- */
+const EPS=1e-12, deg2rad=d=>d*Math.PI/180;
+const project=(pt,lat0)=>({x:pt.lon*Math.cos(deg2rad(lat0)), y:pt.lat});
+const unproject=(xy,lat0)=>({lat:xy.y, lon:xy.x/Math.cos(deg2rad(lat0))});
 
 function lineRayIntersection(A,B,C){
   const lat0=(A.lat+B.lat+C.lat)/3;
   const a=project(A,lat0), b=project(B,lat0), c=project(C,lat0);
-  const r={x:b.x-a.x, y:b.y-a.y};   // AB direction
-  const s={x:c.x-b.x, y:c.y-b.y};   // BC direction
+  const r={x:b.x-a.x, y:b.y-a.y};   // AB dir
+  const s={x:c.x-b.x, y:c.y-b.y};   // BC dir (ray)
   const p=a, q=c;
-  const rxs=r.x*s.y - r.y*s.x;
-  if(Math.abs(rxs)<EPS) return null;      // parallel
-  const q_p={x:q.x-p.x, y:q.y-p.y};
-  const u=(q_p.x*r.y - q_p.y*r.x)/rxs;   // along ray
-  if(u<0) return null;                   // behind C
-  const t=(q_p.x*s.y - q_p.y*s.x)/rxs;   // on AB line
+  const rxs=r.x*s.y - r.y*s.x; if(Math.abs(rxs)<EPS) return null; // parallel
+  const qp={x:q.x-p.x, y:q.y-p.y};
+  const u=(qp.x*r.y - qp.y*r.x)/rxs; if(u<0) return null;         // behind C
+  const t=(qp.x*s.y - qp.y*s.x)/rxs;
   const hit={x:p.x + t*r.x, y:p.y + t*r.y};
-  const D=unproject(hit,lat0);
-  return D;
+  return unproject(hit,lat0);
 }
 
-function setUsePredEnabled(enabled){
-  usePredBtn.disabled = !enabled;
-}
+function setUsePredEnabled(enabled){ usePredBtn.disabled=!enabled; }
+function setStatus(text){ predStatus.textContent = `Prediction: ${text}`; }
 function hidePrediction(){
-  lastPrediction = null;
-  predMarker.setStyle({ opacity: 0, fillOpacity: 0 });
+  lastPrediction=null;
+  predMarker.setStyle({opacity:0, fillOpacity:0});
   predLine.setLatLngs([]);
   setUsePredEnabled(false);
+  setStatus(points.length<3?'add ≥3 points':'none');
 }
-function showPrediction(C, D){
-  lastPrediction = D;
-  predMarker
-    .setLatLng([D.lat, D.lon])
-    .setStyle({ opacity: 0.8, fillOpacity: 0.35 })
-    .bindPopup('<b>Predicted next point</b>');
+function showPrediction(C,D){
+  lastPrediction=D;
+  predMarker.setLatLng([D.lat,D.lon]).setStyle({opacity:.8, fillOpacity:.35}).bindPopup('<b>Predicted next point</b>');
   predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
   setUsePredEnabled(true);
+  // distance hint
+  const km = haversine(C.lat,C.lon,D.lat,D.lon).toFixed(1);
+  setStatus(`available (${km} km away)`);
 }
 
 function updatePredictedPoint(){
   if(points.length<3){ hidePrediction(); return; }
-  const n=points.length;
-  const A=points[n-3], B=points[n-2], C=points[n-1];
+  const n=points.length, A=points[n-3], B=points[n-2], C=points[n-1];
   const D=lineRayIntersection(A,B,C);
   if(!D){ hidePrediction(); return; }
-  showPrediction(C, D);
+  showPrediction(C,D);
 }
 
-/* --- Use prediction button --- */
+predictBtn.addEventListener('click', updatePredictedPoint);
 usePredBtn.addEventListener('click', ()=>{
   if(!lastPrediction) return;
-  const {lat, lon} = lastPrediction;
-  addPlace([lat, lon], 'Predicted point');
-  // After adding, a new prediction will be computed automatically in refresh()
+  const {lat,lon}=lastPrediction;
+  addPlace([lat,lon],'Predicted point');
 });
+
+/* --- distance helper for status --- */
+function haversine(lat1,lon1,lat2,lon2){
+  const R=6371, toRad=x=>x*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
 </script>
 </body>
 </html>
