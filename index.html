@@ -66,9 +66,9 @@ let snappedLine  = L.polyline([], { weight: 4, dashArray: '6 6' }).addTo(map);
 /* Predicted next point visuals (D) */
 const predLine = L.polyline([], { weight: 2, dashArray:'2 8', color:'#6b7280' }).addTo(map); // dotted C→D
 const predMarker = L.circleMarker([0,0], {
-  radius: 7, weight: 2, color:'#6b7280', fillColor:'#9ca3af', fillOpacity:0.35
+  radius: 7, weight: 2, color:'#6b7280', fillColor:'#9ca3af',
+  opacity: 0, fillOpacity: 0   // start hidden
 }).addTo(map);
-predMarker.setOpacity(0); // hidden initially
 
 function openPanel(){ panel.style.display='block'; results.innerHTML=''; query.value=''; query.focus(); }
 function closePanel(){ panel.style.display='none'; }
@@ -98,7 +98,7 @@ function refresh(){
   if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
   buildList();
   scheduleRouteUpdate();
-  updatePredictedPoint();   // <- compute and show faded D
+  updatePredictedPoint();   // compute and show faded D
 }
 
 function buildList(){
@@ -163,11 +163,11 @@ function showResults(items){
 }
 query.addEventListener('input', e=>{
   const q = e.target.value.trim();
-  if(q.length<3){ results.innerHTML=''; abortCtrl?.abort(); return; }
+  if(q.length<3){ results.innerHTML=''; if(abortCtrl) abortCtrl.abort(); return; }
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async ()=>{
     try{
-      abortCtrl?.abort();
+      if(abortCtrl) abortCtrl.abort();
       abortCtrl = new AbortController();
       const url = `https://nominatim.openstreetmap.org/search?format=json&limit=8&q=${encodeURIComponent(q)}`;
       const res = await fetch(url,{signal:abortCtrl.signal, headers:{'Accept':'application/json'}});
@@ -227,11 +227,9 @@ exportBtn.addEventListener('click', ()=>{
 });
 
 /* --- Predict 4th point from last three (A,B,C) ---
-   We compute D = intersection of:
-   • infinite line through A–B
-   • ray from C in the direction of B→C
-   If parallel or hit is behind C, we hide it.
-   Uses local equirectangular projection for simple 2D math.
+   D = intersection of line(AB) and ray from C along (B→C).
+   If parallel or hit behind C, hide prediction.
+   Uses local equirectangular projection for 2D math.
 */
 const EPS = 1e-12;
 const deg2rad = d=>d*Math.PI/180;
@@ -252,26 +250,28 @@ function lineRayIntersection(A,B,C){
   const t=(q_p.x*s.y - q_p.y*s.x)/rxs;   // on AB line
   const hit={x:p.x + t*r.x, y:p.y + t*r.y};
   const D=unproject(hit,lat0);
-  return {D, lat0};
+  return D;
+}
+
+function hidePrediction(){
+  predMarker.setStyle({ opacity: 0, fillOpacity: 0 });
+  predLine.setLatLngs([]);
+}
+function showPrediction(C, D){
+  predMarker
+    .setLatLng([D.lat, D.lon])
+    .setStyle({ opacity: 0.8, fillOpacity: 0.35 })
+    .bindPopup('<b>Predicted next point</b>');
+  predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
 }
 
 function updatePredictedPoint(){
-  if(points.length<3){
-    predMarker.setOpacity(0);
-    predLine.setLatLngs([]);
-    return;
-  }
+  if(points.length<3){ hidePrediction(); return; }
   const n=points.length;
   const A=points[n-3], B=points[n-2], C=points[n-1];
-  const hit=lineRayIntersection(A,B,C);
-  if(!hit){
-    predMarker.setOpacity(0);
-    predLine.setLatLngs([]);
-    return;
-  }
-  const {D}=hit;
-  predMarker.setLatLng([D.lat, D.lon]).setOpacity(1).bindPopup('<b>Predicted next point</b>');
-  predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
+  const D=lineRayIntersection(A,B,C);
+  if(!D){ hidePrediction(); return; }
+  showPrediction(C, D);
 }
 </script>
 </body>
