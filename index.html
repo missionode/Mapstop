@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Map Route Builder — Add, Reorder, Export</title>
+<title>Map Route Builder — Next Intersection Preview</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
   html,body,#map{height:100%;margin:0}
@@ -21,8 +21,6 @@
   .handle{cursor:grab;font:600 14px/1 monospace;color:#64748b}
   .label{flex:1 1 auto;font-size:13px}
   .del{border:none;background:#fee2e2;color:#991b1b;font-weight:700;border-radius:6px;padding:6px 8px;cursor:pointer}
-  .meta{display:flex;gap:10px;align-items:center;padding:8px 10px}
-  .meta label{font-size:13px;display:flex;align-items:center;gap:6px}
 </style>
 </head>
 <body>
@@ -42,14 +40,13 @@
     <input id="query" type="text" placeholder="Search a place (min 3 chars)..." autocomplete="off"/>
   </div>
   <div id="results"></div>
-  <div class="meta">
-    <strong>Waypoints</strong>
-  </div>
+  <div style="padding:8px 10px;font-weight:700">Waypoints</div>
   <div id="waypoints"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script>
+/* --- Map --- */
 const map = L.map('map').setView([20.5937,78.9629],5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
 
@@ -62,19 +59,22 @@ const query = document.getElementById('query');
 const results = document.getElementById('results');
 const wpList = document.getElementById('waypoints');
 
-const points = [];          // [{lat,lon,label,marker}]
+const points = []; // [{lat,lon,label,marker}]
 let straightLine = L.polyline([], { weight: 4 }).addTo(map);
-let snappedLine = L.polyline([], { weight: 4, dashArray: '6 6' }).addTo(map);
+let snappedLine  = L.polyline([], { weight: 4, dashArray: '6 6' }).addTo(map);
 
-function openPanel(){
-  panel.style.display = 'block'; results.innerHTML=''; query.value=''; query.focus();
-}
-function closePanel(){ panel.style.display = 'none'; }
+/* Next-intersection visuals */
+const nextIxLine = L.polyline([], { weight: 2, dashArray: '2 6' }).addTo(map);
+const nextIxMarker = L.circleMarker([0,0], { radius: 6, weight: 2, fillOpacity: 0.6 }).addTo(map);
+nextIxMarker.setStyle({ color:'#0f766e', fillColor:'#14b8a6' });
+nextIxMarker.setOpacity(0); // hidden initially
+
+function openPanel(){ panel.style.display='block'; results.innerHTML=''; query.value=''; query.focus(); }
+function closePanel(){ panel.style.display='none'; }
 addBtn.addEventListener('click', ()=> panel.style.display==='block' ? closePanel() : openPanel());
 
 function addPlace([lat, lon], label){
-  const marker = L.marker([lat,lon]).addTo(map)
-    .bindPopup(`<b>${label}</b><br>${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+  const marker = L.marker([lat,lon]).addTo(map).bindPopup(`<b>${label}</b><br>${lat.toFixed(5)}, ${lon.toFixed(5)}`);
   points.push({lat,lon,label,marker});
   refresh();
 }
@@ -92,12 +92,12 @@ function clearAll(){
 clearBtn.addEventListener('click', clearAll);
 
 function refresh(){
-  // rebuild straight poly, fit map, list, and maybe snapped route
   straightLine.setLatLngs(points.map(p=>[p.lat,p.lon]));
   if(points.length===1) map.setView([points[0].lat,points[0].lon], 12);
   if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
   buildList();
   scheduleRouteUpdate();
+  updateNextIntersection();
 }
 
 function buildList(){
@@ -125,7 +125,6 @@ function buildList(){
     del.onclick = ()=>removeIndex(idx);
     row.appendChild(del);
 
-    // drag & drop
     row.addEventListener('dragstart', e=>{
       e.dataTransfer.setData('text/plain', idx);
       e.dataTransfer.effectAllowed = 'move';
@@ -178,16 +177,12 @@ query.addEventListener('input', e=>{
 });
 
 /* --- Snap-to-road (OSRM) --- */
-let routeTimer=null;
 snapChk.addEventListener('change', ()=>scheduleRouteUpdate());
-function scheduleRouteUpdate(){
-  clearTimeout(routeTimer);
-  routeTimer = setTimeout(updateRoute, 150);
-}
+let routeTimer=null;
+function scheduleRouteUpdate(){ clearTimeout(routeTimer); routeTimer=setTimeout(updateRoute, 150); }
 async function updateRoute(){
   snappedLine.setLatLngs([]);
   if(!snapChk.checked || points.length<2) return;
-
   const coords = points.map(p=>`${p.lon},${p.lat}`).join(';');
   const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
   try{
@@ -195,29 +190,18 @@ async function updateRoute(){
     if(!res.ok) throw new Error('routing failed');
     const data = await res.json();
     const geom = data?.routes?.[0]?.geometry;
-    if(!geom){ return; }
+    if(!geom) return;
     const latlngs = geom.coordinates.map(([lng,lat])=>[lat,lng]);
     snappedLine.setLatLngs(latlngs);
-  }catch(e){
-    // fallback silently; straightLine already shown
-  }
+  }catch(e){ /* silent */ }
 }
 
 /* --- Export GeoJSON --- */
 function toGeoJSON(){
-  const fc = {
-    type:"FeatureCollection",
-    features:[]
-  };
-  // Points
+  const fc = { type:"FeatureCollection", features:[] };
   for(const [i,p] of points.entries()){
-    fc.features.push({
-      type:"Feature",
-      properties:{ order:i+1, name:p.label },
-      geometry:{ type:"Point", coordinates:[p.lon,p.lat] }
-    });
+    fc.features.push({ type:"Feature", properties:{order:i+1,name:p.label}, geometry:{ type:"Point", coordinates:[p.lon,p.lat] }});
   }
-  // LineString (order)
   if(points.length>=2){
     fc.features.push({
       type:"Feature",
@@ -240,6 +224,59 @@ exportBtn.addEventListener('click', ()=>{
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(a.href);
 });
+
+/* --- Next possible intersection (last three points) --- */
+/* Uses an equirectangular projection for simple 2D line/ray math. */
+function deg2rad(d){ return d*Math.PI/180; }
+function project(pt, lat0){
+  // equirectangular around mean latitude to reduce distortion
+  const cl = Math.cos(deg2rad(lat0));
+  return { x: pt.lon*cl, y: pt.lat };
+}
+function unproject(xy, lat0){
+  const cl = Math.cos(deg2rad(lat0));
+  return { lat: xy.y, lon: xy.x / cl };
+}
+/* Returns intersection point of:
+   - infinite line through A,B
+   - ray starting at C going in direction (B->C)
+   If parallel or intersection behind C, returns null.
+*/
+function lineRayIntersection(A,B,C){
+  const lat0 = (A.lat+B.lat+C.lat)/3;
+  const a = project(A,lat0), b = project(B,lat0), c = project(C,lat0);
+  const r = { x: b.x - a.x, y: b.y - a.y };   // AB direction
+  const s = { x: c.x - b.x, y: c.y - b.y };   // BC direction; ray from C will use same direction
+  const p = { x: a.x, y: a.y };               // line point
+  const q = { x: c.x, y: c.y };               // ray origin
+  const rxs = r.x*s.y - r.y*s.x;
+  if (Math.abs(rxs) < 1e-12) return null;     // parallel
+  const q_p = { x: q.x - p.x, y: q.y - p.y };
+  const t = (q_p.x*s.y - q_p.y*s.x) / rxs;    // line parameter
+  const u = (q_p.x*r.y - q_p.y*r.x) / rxs;    // ray parameter along s
+  if (u < 0) return null;                     // intersection is behind C on the ray
+  const hit = { x: p.x + t*r.x, y: p.y + t*r.y };
+  return unproject(hit, lat0);
+}
+
+function updateNextIntersection(){
+  if(points.length < 3){
+    nextIxMarker.setOpacity(0);
+    nextIxLine.setLatLngs([]);
+    return;
+  }
+  const n = points.length;
+  const A = points[n-3], B = points[n-2], C = points[n-1];
+  const hit = lineRayIntersection(A,B,C);
+  if(!hit){
+    nextIxMarker.setOpacity(0);
+    nextIxLine.setLatLngs([]);
+    return;
+  }
+  // draw helper line C -> hit and a marker at hit
+  nextIxMarker.setLatLng([hit.lat, hit.lon]).setOpacity(1).bindPopup('<b>Predicted intersection</b>');
+  nextIxLine.setLatLngs([[C.lat,C.lon],[hit.lat,hit.lon]]);
+}
 </script>
 </body>
 </html>
