@@ -9,6 +9,7 @@
   html,body,#map{height:100%;margin:0}
   .controls{position:absolute;top:12px;left:12px;z-index:1000;display:flex;gap:8px;flex-wrap:wrap}
   .btn{border:1px solid #cbd5e1;background:#fff;padding:8px 12px;border-radius:8px;font:600 14px system-ui;box-shadow:0 1px 2px rgba(0,0,0,.06);cursor:pointer}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
   #panel{position:absolute;top:56px;left:12px;z-index:1000;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
   #searchBox{padding:10px;border-bottom:1px solid #e2e8f0}
   #query{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
@@ -33,6 +34,7 @@
     <input type="checkbox" id="snapChk"/> Snap to road
   </label>
   <button id="exportBtn" class="btn">Export GeoJSON</button>
+  <button id="usePredBtn" class="btn" disabled>Use prediction ➕</button>
 </div>
 
 <div id="panel">
@@ -54,6 +56,7 @@ const addBtn = document.getElementById('addBtn');
 const clearBtn = document.getElementById('clearBtn');
 const exportBtn = document.getElementById('exportBtn');
 const snapChk = document.getElementById('snapChk');
+const usePredBtn = document.getElementById('usePredBtn');
 const panel = document.getElementById('panel');
 const query = document.getElementById('query');
 const results = document.getElementById('results');
@@ -69,6 +72,8 @@ const predMarker = L.circleMarker([0,0], {
   radius: 7, weight: 2, color:'#6b7280', fillColor:'#9ca3af',
   opacity: 0, fillOpacity: 0   // start hidden
 }).addTo(map);
+
+let lastPrediction = null; // {lat, lon}
 
 function openPanel(){ panel.style.display='block'; results.innerHTML=''; query.value=''; query.focus(); }
 function closePanel(){ panel.style.display='none'; }
@@ -98,7 +103,7 @@ function refresh(){
   if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
   buildList();
   scheduleRouteUpdate();
-  updatePredictedPoint();   // compute and show faded D
+  updatePredictedPoint();
 }
 
 function buildList(){
@@ -253,16 +258,23 @@ function lineRayIntersection(A,B,C){
   return D;
 }
 
+function setUsePredEnabled(enabled){
+  usePredBtn.disabled = !enabled;
+}
 function hidePrediction(){
+  lastPrediction = null;
   predMarker.setStyle({ opacity: 0, fillOpacity: 0 });
   predLine.setLatLngs([]);
+  setUsePredEnabled(false);
 }
 function showPrediction(C, D){
+  lastPrediction = D;
   predMarker
     .setLatLng([D.lat, D.lon])
     .setStyle({ opacity: 0.8, fillOpacity: 0.35 })
     .bindPopup('<b>Predicted next point</b>');
   predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
+  setUsePredEnabled(true);
 }
 
 function updatePredictedPoint(){
@@ -273,6 +285,14 @@ function updatePredictedPoint(){
   if(!D){ hidePrediction(); return; }
   showPrediction(C, D);
 }
+
+/* --- Use prediction button --- */
+usePredBtn.addEventListener('click', ()=>{
+  if(!lastPrediction) return;
+  const {lat, lon} = lastPrediction;
+  addPlace([lat, lon], 'Predicted point');
+  // After adding, a new prediction will be computed automatically in refresh()
+});
 </script>
 </body>
 </html>
