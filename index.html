@@ -14,7 +14,8 @@
   .btn{border:1px solid #cbd5e1;background:#fff;padding:8px 12px;border-radius:8px;font:600 14px system-ui;box-shadow:0 1px 2px rgba(0,0,0,.06);cursor:pointer}
   .btn[disabled]{opacity:.45;cursor:not-allowed}
   .badge{padding:8px 10px;border:1px dashed #cbd5e1;border-radius:8px;font:600 12px;color:#475569;background:#f8fafc}
-  #panel{position:absolute;top:56px;left:12px;z-index:1500;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
+  /* Ensure the Add Place panel appears above the controls bar */
+  #panel{position:absolute;top:56px;left:12px;z-index:3000;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
   #searchBox{padding:10px;border-bottom:1px solid #e2e8f0}
   #query{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
   #results{max-height:220px;overflow:auto}
@@ -235,11 +236,17 @@ function showPrediction(C,D){
 }
 
 function updatePredictedPoint(){
-  if(points.length<3){ hidePrediction(); return; }
-  const n=points.length, A=points[n-3], B=points[n-2], C=points[n-1];
-  const D=lineRayIntersection(A,B,C);
-  if(!D){ hidePrediction(); return; }
-  showPrediction(C,D);
+  // Compute a simple rectangular intersection: using lat of last point C and lon of first of last three (A).
+  if(points.length < 3){ hidePrediction(); return; }
+  const n = points.length;
+  const A = points[n - 3];
+  const C = points[n - 1];
+  // Predicted point lies on latitude of C and longitude of A
+  const D = { lat: C.lat, lon: A.lon };
+  // If the predicted point coincides with any existing point, we skip prediction
+  const exists = points.some(p => Math.abs(p.lat - D.lat) < 1e-6 && Math.abs(p.lon - D.lon) < 1e-6);
+  if(exists){ hidePrediction(); return; }
+  showPrediction(C, D);
 }
 
 predictBtn.addEventListener('click', updatePredictedPoint);
