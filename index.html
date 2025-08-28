@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Map Route Builder — Next Intersection Preview</title>
+<title>Map Route Builder — Predicted 4th Point</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
   html,body,#map{height:100%;margin:0}
@@ -63,11 +63,12 @@ const points = []; // [{lat,lon,label,marker}]
 let straightLine = L.polyline([], { weight: 4 }).addTo(map);
 let snappedLine  = L.polyline([], { weight: 4, dashArray: '6 6' }).addTo(map);
 
-/* Next-intersection visuals */
-const nextIxLine = L.polyline([], { weight: 2, dashArray: '2 6' }).addTo(map);
-const nextIxMarker = L.circleMarker([0,0], { radius: 6, weight: 2, fillOpacity: 0.6 }).addTo(map);
-nextIxMarker.setStyle({ color:'#0f766e', fillColor:'#14b8a6' });
-nextIxMarker.setOpacity(0); // hidden initially
+/* Predicted next point visuals (D) */
+const predLine = L.polyline([], { weight: 2, dashArray:'2 8', color:'#6b7280' }).addTo(map); // dotted C→D
+const predMarker = L.circleMarker([0,0], {
+  radius: 7, weight: 2, color:'#6b7280', fillColor:'#9ca3af', fillOpacity:0.35
+}).addTo(map);
+predMarker.setOpacity(0); // hidden initially
 
 function openPanel(){ panel.style.display='block'; results.innerHTML=''; query.value=''; query.focus(); }
 function closePanel(){ panel.style.display='none'; }
@@ -97,7 +98,7 @@ function refresh(){
   if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
   buildList();
   scheduleRouteUpdate();
-  updateNextIntersection();
+  updatePredictedPoint();   // <- compute and show faded D
 }
 
 function buildList(){
@@ -225,57 +226,52 @@ exportBtn.addEventListener('click', ()=>{
   URL.revokeObjectURL(a.href);
 });
 
-/* --- Next possible intersection (last three points) --- */
-/* Uses an equirectangular projection for simple 2D line/ray math. */
-function deg2rad(d){ return d*Math.PI/180; }
-function project(pt, lat0){
-  // equirectangular around mean latitude to reduce distortion
-  const cl = Math.cos(deg2rad(lat0));
-  return { x: pt.lon*cl, y: pt.lat };
-}
-function unproject(xy, lat0){
-  const cl = Math.cos(deg2rad(lat0));
-  return { lat: xy.y, lon: xy.x / cl };
-}
-/* Returns intersection point of:
-   - infinite line through A,B
-   - ray starting at C going in direction (B->C)
-   If parallel or intersection behind C, returns null.
+/* --- Predict 4th point from last three (A,B,C) ---
+   We compute D = intersection of:
+   • infinite line through A–B
+   • ray from C in the direction of B→C
+   If parallel or hit is behind C, we hide it.
+   Uses local equirectangular projection for simple 2D math.
 */
+const EPS = 1e-12;
+const deg2rad = d=>d*Math.PI/180;
+function project(pt, lat0){ const cl=Math.cos(deg2rad(lat0)); return {x:pt.lon*cl, y:pt.lat}; }
+function unproject(xy, lat0){ const cl=Math.cos(deg2rad(lat0)); return {lat:xy.y, lon:xy.x/cl}; }
+
 function lineRayIntersection(A,B,C){
-  const lat0 = (A.lat+B.lat+C.lat)/3;
-  const a = project(A,lat0), b = project(B,lat0), c = project(C,lat0);
-  const r = { x: b.x - a.x, y: b.y - a.y };   // AB direction
-  const s = { x: c.x - b.x, y: c.y - b.y };   // BC direction; ray from C will use same direction
-  const p = { x: a.x, y: a.y };               // line point
-  const q = { x: c.x, y: c.y };               // ray origin
-  const rxs = r.x*s.y - r.y*s.x;
-  if (Math.abs(rxs) < 1e-12) return null;     // parallel
-  const q_p = { x: q.x - p.x, y: q.y - p.y };
-  const t = (q_p.x*s.y - q_p.y*s.x) / rxs;    // line parameter
-  const u = (q_p.x*r.y - q_p.y*r.x) / rxs;    // ray parameter along s
-  if (u < 0) return null;                     // intersection is behind C on the ray
-  const hit = { x: p.x + t*r.x, y: p.y + t*r.y };
-  return unproject(hit, lat0);
+  const lat0=(A.lat+B.lat+C.lat)/3;
+  const a=project(A,lat0), b=project(B,lat0), c=project(C,lat0);
+  const r={x:b.x-a.x, y:b.y-a.y};   // AB direction
+  const s={x:c.x-b.x, y:c.y-b.y};   // BC direction
+  const p=a, q=c;
+  const rxs=r.x*s.y - r.y*s.x;
+  if(Math.abs(rxs)<EPS) return null;      // parallel
+  const q_p={x:q.x-p.x, y:q.y-p.y};
+  const u=(q_p.x*r.y - q_p.y*r.x)/rxs;   // along ray
+  if(u<0) return null;                   // behind C
+  const t=(q_p.x*s.y - q_p.y*s.x)/rxs;   // on AB line
+  const hit={x:p.x + t*r.x, y:p.y + t*r.y};
+  const D=unproject(hit,lat0);
+  return {D, lat0};
 }
 
-function updateNextIntersection(){
-  if(points.length < 3){
-    nextIxMarker.setOpacity(0);
-    nextIxLine.setLatLngs([]);
+function updatePredictedPoint(){
+  if(points.length<3){
+    predMarker.setOpacity(0);
+    predLine.setLatLngs([]);
     return;
   }
-  const n = points.length;
-  const A = points[n-3], B = points[n-2], C = points[n-1];
-  const hit = lineRayIntersection(A,B,C);
+  const n=points.length;
+  const A=points[n-3], B=points[n-2], C=points[n-1];
+  const hit=lineRayIntersection(A,B,C);
   if(!hit){
-    nextIxMarker.setOpacity(0);
-    nextIxLine.setLatLngs([]);
+    predMarker.setOpacity(0);
+    predLine.setLatLngs([]);
     return;
   }
-  // draw helper line C -> hit and a marker at hit
-  nextIxMarker.setLatLng([hit.lat, hit.lon]).setOpacity(1).bindPopup('<b>Predicted intersection</b>');
-  nextIxLine.setLatLngs([[C.lat,C.lon],[hit.lat,hit.lon]]);
+  const {D}=hit;
+  predMarker.setLatLng([D.lat, D.lon]).setOpacity(1).bindPopup('<b>Predicted next point</b>');
+  predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
 }
 </script>
 </body>
