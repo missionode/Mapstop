@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,12 +9,13 @@
 <style>
   html,body,#map{height:100%;margin:0}
   .controls{
-    position:absolute;top:12px;left:12px;z-index:2000;
+    position:absolute;inset:auto 0 auto 0;top:12px;left:12px;z-index:2000;
     display:flex;flex-wrap:wrap;gap:8px;max-width:min(96vw,760px)
   }
   .btn{border:1px solid #cbd5e1;background:#fff;padding:8px 12px;border-radius:8px;font:600 14px system-ui;box-shadow:0 1px 2px rgba(0,0,0,.06);cursor:pointer}
   .btn[disabled]{opacity:.45;cursor:not-allowed}
   .badge{padding:8px 10px;border:1px dashed #cbd5e1;border-radius:8px;font:600 12px;color:#475569;background:#f8fafc}
+  /* Ensure the Add Place panel appears above the controls bar */
   #panel{position:absolute;top:56px;left:12px;z-index:3000;width:min(92vw,380px);background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);display:none}
   #searchBox{padding:10px;border-bottom:1px solid #e2e8f0}
   #query{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
@@ -26,13 +28,12 @@
   .handle{cursor:grab;font:600 14px/1 monospace;color:#64748b}
   .label{flex:1 1 auto;font-size:13px}
   .del{border:none;background:#fee2e2;color:#991b1b;font-weight:700;border-radius:6px;padding:6px 8px;cursor:pointer}
-  .pred-tip{font:600 11px system-ui; background:#fff; border:1px solid #e5e7eb; color:#111827; padding:2px 6px; border-radius:6px;}
 </style>
 </head>
 <body>
 <div id="map"></div>
 
-<div class="controls">
+<div class="controls" id="controls">
   <button id="addBtn" class="btn">Add Place</button>
   <button id="clearBtn" class="btn">Clear</button>
   <label class="btn" style="display:flex;gap:6px;align-items:center;">
@@ -59,138 +60,210 @@
 const map = L.map('map').setView([20.5937,78.9629],5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
 
-const addBtn=document.getElementById('addBtn');
-const clearBtn=document.getElementById('clearBtn');
-const exportBtn=document.getElementById('exportBtn');
-const predictBtn=document.getElementById('predictBtn');
-const usePredBtn=document.getElementById('usePredBtn');
-const predStatus=document.getElementById('predStatus');
-const snapChk=document.getElementById('snapChk');
-const panel=document.getElementById('panel');
-const query=document.getElementById('query');
-const results=document.getElementById('results');
-const wpList=document.getElementById('waypoints');
+const addBtn = document.getElementById('addBtn');
+const clearBtn = document.getElementById('clearBtn');
+const exportBtn = document.getElementById('exportBtn');
+const predictBtn = document.getElementById('predictBtn');
+const usePredBtn = document.getElementById('usePredBtn');
+const predStatus = document.getElementById('predStatus');
+const snapChk = document.getElementById('snapChk');
+const panel = document.getElementById('panel');
+const query = document.getElementById('query');
+const results = document.getElementById('results');
+const wpList = document.getElementById('waypoints');
 
-const points=[]; // {lat,lon,label,marker}
-let straightLine=L.polyline([], {weight:4}).addTo(map);
-let snappedLine=L.polyline([], {weight:4,dashArray:'6 6'}).addTo(map);
+const points = []; // [{lat,lon,label,marker}]
+let straightLine = L.polyline([], { weight: 4 }).addTo(map);
+let snappedLine  = L.polyline([], { weight: 4, dashArray: '6 6' }).addTo(map);
 
-const predLine=L.polyline([], {weight:2,dashArray:'2 8',color:'#6b7280'}).addTo(map);
-const predMarker=L.circleMarker([0,0],{
-  radius:7,weight:2,color:'#6b7280',fillColor:'#9ca3af',
-  opacity:0,fillOpacity:0
+/* Predicted next point visuals (D) */
+const predLine = L.polyline([], { weight: 2, dashArray:'2 8', color:'#6b7280' }).addTo(map); // dotted C→D
+const predMarker = L.circleMarker([0,0], {
+  radius: 7, weight: 2, color:'#6b7280', fillColor:'#9ca3af',
+  opacity: 0, fillOpacity: 0   // start hidden
 }).addTo(map);
 
-let lastPrediction=null;
+let lastPrediction = null; // {lat, lon}
 
-function openPanel(){panel.style.display='block';results.innerHTML='';query.value='';query.focus();}
-function closePanel(){panel.style.display='none';}
-addBtn.addEventListener('click',()=>panel.style.display==='block'?closePanel():openPanel());
+function openPanel(){ panel.style.display='block'; results.innerHTML=''; query.value=''; query.focus(); }
+function closePanel(){ panel.style.display='none'; }
+addBtn.addEventListener('click', ()=> panel.style.display==='block' ? closePanel() : openPanel());
 
-function addPlace([lat,lon],label){
-  const marker=L.marker([lat,lon]).addTo(map).bindPopup(`<b>${label}</b><br>${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+function addPlace([lat, lon], label){
+  const marker = L.marker([lat,lon]).addTo(map).bindPopup(`<b>${label}</b><br>${lat.toFixed(5)}, ${lon.toFixed(5)}`);
   points.push({lat,lon,label,marker});
   refresh();
 }
-function removeIndex(i){const p=points[i];if(!p)return;map.removeLayer(p.marker);points.splice(i,1);refresh();}
-function clearAll(){points.forEach(p=>map.removeLayer(p.marker));points.length=0;refresh();}
-clearBtn.addEventListener('click',clearAll);
+function removeIndex(i){
+  const p = points[i]; if(!p) return;
+  map.removeLayer(p.marker);
+  points.splice(i,1);
+  refresh();
+}
+function clearAll(){
+  points.forEach(p=>map.removeLayer(p.marker));
+  points.length = 0;
+  refresh();
+}
+clearBtn.addEventListener('click', clearAll);
 
 function refresh(){
   straightLine.setLatLngs(points.map(p=>[p.lat,p.lon]));
-  if(points.length===1) map.setView([points[0].lat,points[0].lon],12);
-  if(points.length>=2) map.fitBounds(straightLine.getBounds(),{padding:[40,40]});
-  buildList(); scheduleRouteUpdate(); updatePredictedPoint();
+  if(points.length===1) map.setView([points[0].lat,points[0].lon], 12);
+  if(points.length>=2) map.fitBounds(straightLine.getBounds(), { padding:[40,40] });
+  buildList();
+  scheduleRouteUpdate();
+  updatePredictedPoint(); // compute & update UI
 }
 
 function buildList(){
-  wpList.innerHTML='';
+  wpList.innerHTML = '';
   points.forEach((p,idx)=>{
-    const row=document.createElement('div');row.className='wp';row.draggable=true;row.dataset.index=idx;
-    const handle=document.createElement('span');handle.className='handle';handle.textContent='↕';row.appendChild(handle);
-    const label=document.createElement('div');label.className='label';label.textContent=`${idx+1}. ${p.label}`;row.appendChild(label);
-    const del=document.createElement('button');del.className='del';del.textContent='×';del.onclick=()=>removeIndex(idx);row.appendChild(del);
-    row.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',idx);e.dataTransfer.effectAllowed='move';});
-    row.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';});
-    row.addEventListener('drop',e=>{e.preventDefault();const from=+e.dataTransfer.getData('text/plain');const to=+row.dataset.index;if(from===to)return;const [moved]=points.splice(from,1);points.splice(to,0,moved);refresh();});
+    const row = document.createElement('div'); row.className='wp'; row.draggable=true; row.dataset.index=idx;
+    const handle = document.createElement('span'); handle.className='handle'; handle.textContent='↕'; row.appendChild(handle);
+    const label = document.createElement('div'); label.className='label'; label.textContent=`${idx+1}. ${p.label}`; row.appendChild(label);
+    const del = document.createElement('button'); del.className='del'; del.textContent='×'; del.title='Remove'; del.onclick=()=>removeIndex(idx); row.appendChild(del);
+
+    row.addEventListener('dragstart', e=>{ e.dataTransfer.setData('text/plain', idx); e.dataTransfer.effectAllowed='move'; });
+    row.addEventListener('dragover', e=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; });
+    row.addEventListener('drop', e=>{
+      e.preventDefault();
+      const from=+e.dataTransfer.getData('text/plain'); const to=+row.dataset.index;
+      if(from===to) return;
+      const [moved]=points.splice(from,1); points.splice(to,0,moved); refresh();
+    });
     wpList.appendChild(row);
   });
 }
 
-/* --- Search --- */
-let debounceTimer=null,abortCtrl=null;
+/* --- Search (Nominatim) --- */
+let debounceTimer=null, abortCtrl=null;
 function showResults(items){
-  results.innerHTML='';
-  if(!items.length){results.innerHTML='<div class=\"empty\">No matches</div>';return;}
+  results.innerHTML = '';
+  if(!items.length){ results.innerHTML = '<div class="empty">No matches</div>'; return; }
   for(const item of items){
-    const div=document.createElement('div');div.className='result';div.textContent=item.display_name;
-    div.onclick=()=>{addPlace([parseFloat(item.lat),parseFloat(item.lon)],item.display_name);closePanel();};
+    const div=document.createElement('div'); div.className='result'; div.textContent=item.display_name;
+    div.onclick=()=>{ addPlace([parseFloat(item.lat), parseFloat(item.lon)], item.display_name); closePanel(); };
     results.appendChild(div);
   }
 }
-query.addEventListener('input',e=>{
-  const q=e.target.value.trim();if(q.length<3){results.innerHTML='';if(abortCtrl)abortCtrl.abort();return;}
+query.addEventListener('input', e=>{
+  const q=e.target.value.trim();
+  if(q.length<3){ results.innerHTML=''; if(abortCtrl) abortCtrl.abort(); return; }
   clearTimeout(debounceTimer);
-  debounceTimer=setTimeout(async()=>{
-    try{if(abortCtrl)abortCtrl.abort();abortCtrl=new AbortController();
+  debounceTimer=setTimeout(async ()=>{
+    try{
+      if(abortCtrl) abortCtrl.abort();
+      abortCtrl=new AbortController();
       const url=`https://nominatim.openstreetmap.org/search?format=json&limit=8&q=${encodeURIComponent(q)}`;
-      const res=await fetch(url,{signal:abortCtrl.signal,headers:{'Accept':'application/json'}});const data=await res.json();showResults(data);}
-    catch(err){if(err.name!=='AbortError')results.innerHTML='<div class=\"empty\">Search failed</div>';}
+      const res=await fetch(url,{signal:abortCtrl.signal, headers:{'Accept':'application/json'}});
+      const data=await res.json(); showResults(data);
+    }catch(err){ if(err.name!=='AbortError') results.innerHTML='<div class="empty">Search failed</div>'; }
   },300);
 });
 
-/* --- Snap-to-road --- */
-snapChk.addEventListener('change',()=>scheduleRouteUpdate());
+/* --- Snap-to-road (OSRM) --- */
+snapChk.addEventListener('change', ()=>scheduleRouteUpdate());
 let routeTimer=null;
-function scheduleRouteUpdate(){clearTimeout(routeTimer);routeTimer=setTimeout(updateRoute,150);}
+function scheduleRouteUpdate(){ clearTimeout(routeTimer); routeTimer=setTimeout(updateRoute, 150); }
 async function updateRoute(){
   snappedLine.setLatLngs([]);
-  if(!snapChk.checked||points.length<2) return;
-  const coords=points.map(p=>`${p.lon},${p.lat}`).join(';');
-  const url=`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
-  try{const res=await fetch(url);if(!res.ok)throw new Error('routing failed');
-    const data=await res.json();const geom=data?.routes?.[0]?.geometry;if(!geom)return;
-    const latlngs=geom.coordinates.map(([lng,lat])=>[lat,lng]);snappedLine.setLatLngs(latlngs);}
-  catch(e){}
+  if(!snapChk.checked || points.length<2) return;
+  const coords = points.map(p=>`${p.lon},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  try{
+    const res=await fetch(url); if(!res.ok) throw new Error('routing failed');
+    const data=await res.json(); const geom=data?.routes?.[0]?.geometry; if(!geom) return;
+    const latlngs=geom.coordinates.map(([lng,lat])=>[lat,lng]); snappedLine.setLatLngs(latlngs);
+  }catch(e){ /* silent */ }
 }
 
-/* --- Export --- */
+/* --- Export GeoJSON --- */
 function toGeoJSON(){
-  const fc={type:\"FeatureCollection\",features:[]};
-  for(const [i,p] of points.entries()){fc.features.push({type:\"Feature\",properties:{order:i+1,name:p.label},geometry:{type:\"Point\",coordinates:[p.lon,p.lat]}});}
-  if(points.length>=2){fc.features.push({type:\"Feature\",properties:{name:snapChk.checked?\"route_snapped\":\"route_straight\"},geometry:{type:\"LineString\",coordinates:(snappedLine.getLatLngs().length&&snapChk.checked)?snappedLine.getLatLngs().map(ll=>[ll.lng,ll.lat]):points.map(p=>[p.lon,p.lat])}});}
+  const fc={type:"FeatureCollection",features:[]};
+  for(const [i,p] of points.entries()){
+    fc.features.push({type:"Feature",properties:{order:i+1,name:p.label},geometry:{type:"Point",coordinates:[p.lon,p.lat]}});
+  }
+  if(points.length>=2){
+    fc.features.push({
+      type:"Feature",properties:{name:snapChk.checked?"route_snapped":"route_straight"},
+      geometry:{type:"LineString",coordinates:(snappedLine.getLatLngs().length&&snapChk.checked)?snappedLine.getLatLngs().map(ll=>[ll.lng,ll.lat]):points.map(p=>[p.lon,p.lat])}
+    });
+  }
   return fc;
 }
-exportBtn.addEventListener('click',()=>{const blob=new Blob([JSON.stringify(toGeoJSON(),null,2)],{type:'application/geo+json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='route.geojson';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);});
+exportBtn.addEventListener('click', ()=>{
+  const blob=new Blob([JSON.stringify(toGeoJSON(),null,2)],{type:'application/geo+json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='route.geojson';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+});
 
-/* --- Prediction --- */
-const fmt=n=>n.toFixed(6);
-function setUsePredEnabled(e){usePredBtn.disabled=!e;}
-function setStatus(t){predStatus.textContent=`Prediction: ${t}`;}
-function hidePrediction(){lastPrediction=null;predMarker.setStyle({opacity:0,fillOpacity:0});predLine.setLatLngs([]);setUsePredEnabled(false);setStatus(points.length<3?'add ≥3 points':'none');}
+/* --- Prediction math (A,B,C -> D) --- */
+const EPS=1e-12, deg2rad=d=>d*Math.PI/180;
+const project=(pt,lat0)=>({x:pt.lon*Math.cos(deg2rad(lat0)), y:pt.lat});
+const unproject=(xy,lat0)=>({lat:xy.y, lon:xy.x/Math.cos(deg2rad(lat0))});
+
+function lineRayIntersection(A,B,C){
+  const lat0=(A.lat+B.lat+C.lat)/3;
+  const a=project(A,lat0), b=project(B,lat0), c=project(C,lat0);
+  const r={x:b.x-a.x, y:b.y-a.y};   // AB dir
+  const s={x:c.x-b.x, y:c.y-b.y};   // BC dir (ray)
+  const p=a, q=c;
+  const rxs=r.x*s.y - r.y*s.x; if(Math.abs(rxs)<EPS) return null; // parallel
+  const qp={x:q.x-p.x, y:q.y-p.y};
+  const u=(qp.x*r.y - qp.y*r.x)/rxs; if(u<0) return null;         // behind C
+  const t=(qp.x*s.y - qp.y*s.x)/rxs;
+  const hit={x:p.x + t*r.x, y:p.y + t*r.y};
+  return unproject(hit,lat0);
+}
+
+function setUsePredEnabled(enabled){ usePredBtn.disabled=!enabled; }
+function setStatus(text){ predStatus.textContent = `Prediction: ${text}`; }
+function hidePrediction(){
+  lastPrediction=null;
+  predMarker.setStyle({opacity:0, fillOpacity:0});
+  predLine.setLatLngs([]);
+  setUsePredEnabled(false);
+  setStatus(points.length<3?'add ≥3 points':'none');
+}
 function showPrediction(C,D){
   lastPrediction=D;
-  const text=`Lat ${fmt(D.lat)}, Lon ${fmt(D.lon)}`;
-  predMarker
-    .setLatLng([D.lat,D.lon])
-    .setStyle({opacity:.8,fillOpacity:.35})
-    .bindPopup(`<b>Predicted next point</b><br>${text}`)
-    .bindTooltip(text,{permanent:true,direction:'top',offset:[0,-8],className:'pred-tip'})
-    .openTooltip();
+  predMarker.setLatLng([D.lat,D.lon]).setStyle({opacity:.8, fillOpacity:.35}).bindPopup('<b>Predicted next point</b>');
   predLine.setLatLngs([[C.lat,C.lon],[D.lat,D.lon]]);
   setUsePredEnabled(true);
-  setStatus('available');
+  // distance hint
+  const km = haversine(C.lat,C.lon,D.lat,D.lon).toFixed(1);
+  setStatus(`available (${km} km away)`);
 }
-function updatePredictedPoint(){
-  if(points.length<3){hidePrediction();return;}
-  const n=points.length,A=points[n-3],C=points[n-1];
-  const D={lat:C.lat, lon:A.lon}; // simplified: lat of C, lon of A
-  showPrediction(C,D);
-}
-predictBtn.addEventListener('click',updatePredictedPoint);
-usePredBtn.addEventListener('click',()=>{if(!lastPrediction)return;const {lat,lon}=lastPrediction;addPlace([lat,lon],'Predicted point');});
 
-/* --- init --- */
+function updatePredictedPoint(){
+  // Compute a simple rectangular intersection: using lat of last point C and lon of first of last three (A).
+  if(points.length < 3){ hidePrediction(); return; }
+  const n = points.length;
+  const A = points[n - 3];
+  const C = points[n - 1];
+  // Predicted point lies on latitude of C and longitude of A
+  const D = { lat: C.lat, lon: A.lon };
+  // If the predicted point coincides with any existing point, we skip prediction
+  const exists = points.some(p => Math.abs(p.lat - D.lat) < 1e-6 && Math.abs(p.lon - D.lon) < 1e-6);
+  if(exists){ hidePrediction(); return; }
+  showPrediction(C, D);
+}
+
+predictBtn.addEventListener('click', updatePredictedPoint);
+usePredBtn.addEventListener('click', ()=>{
+  if(!lastPrediction) return;
+  const {lat,lon}=lastPrediction;
+  addPlace([lat,lon],'Predicted point');
+});
+
+/* --- distance helper for status --- */
+function haversine(lat1,lon1,lat2,lon2){
+  const R=6371, toRad=x=>x*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
 </script>
 </body>
 </html>
